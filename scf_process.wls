@@ -5,7 +5,7 @@ SetDirectory["/home/physicsmaster/Documents/FXW/STM_votex"];
 
 
 maxmu=159/2;R=30.;temp=0.01;rstep=0.01;kf=1.;xi0=7.6;ef=12.;omgd=ecut=10.;
-Nstates=60;
+Nstates=200;
 ris=Range[0.,R,rstep];(*r coordinates*)iprint=0(*1输出每步流程，0不输出，对于多核并行不建议输出*);
 cycle=1;
 rangecut=8.;
@@ -54,13 +54,13 @@ Nstatesrange=Nstates;
 sortvector[vec_]:=Flatten[{Sort[Select[vec,#1>0&]],Sort[Select[vec,#1<0&],Function[{x,y},Abs[x]<Abs[y]]]}];
 deltaana[xi0_:10,xi1_:2,r_]:=If[r==0,0.`,1/(1+(xi0 Exp[-(r/xi1)])/r)];
 deltainit=Table[deltaana[10,2,r],{r,0,R,rstep}];
-br=Table[jrange[ecut,ef,kf*xi0,mu,-1],{mu,1/2,maxmu}];
+(*br=Table[jrange[ecut,ef,kf*xi0,mu,-1],{mu,1/2,maxmu}];*)
+br=Table[{1,Nstates,mu},{mu,1/2,maxmu}]; (*continous basis range*)
 brstep=1;
 
 
 (*read basis functions*)
-(* str=OpenRead["expcutbasis,kfxi=7.6,ef=12.0,ecut=10,Nstatesrange=60,Nstates=60,R=30.0,rstep=0.01,maxmu=79.5,phinivm"(*"Nstates=100,R=10,rstep=0.01,maxmu=319,phinivm"*)]; *)
-str = OpenRead["expcutbasis,kfxi=7.6,ef=12.0,ecut=10,Nstatesrange=60,Nstates=60,R=30.0,rstep=0.01,maxμ=79.5,ϕnivm"];
+str=OpenRead["expcontinuousbasis,kfxi=7.6,ef=12.0,ecut=10,Nstatesrange=200,Nstates=200,R=30.0,rstep=0.01,max\[Mu]=79.5,\[Phi]nivm"(*"Nstates=100,R=10,rstep=0.01,maxmu=319,phinivm"*)];
 phitemp=Read[str];
 Table[phiniv[i,-1]=(phitemp[[(2 i+1)/2]][[All,1;;(R/rstep+1)]]),{i,1/2,maxmu,1}];
 Table[phiniv[i,1]=(phitemp[[(2 i+1)/2+1]][[All,1;;(R/rstep+1)]]),{i,1/2,maxmu-1,1}];
@@ -70,10 +70,49 @@ phiniv[maxmu,1]=Chop[phini[maxmu,1,br[[-1]](*{1,100,319/2}*)],10.^-50];
 (*ClearAll[phitemp,str];*)
 
 
-hbdginitmatall = ParallelTable[HBdGinit[br[[i]]], {i, 1, Length[br]}];(*产生多个\[Mu]的初始化矩阵*)
+(* non-sc calculation *)
+hbdginitmatall = 
+ ParallelTable[
+  HBdGinit[br[[i]]], {i, 1, Length[br]}];(*产生多个\[Mu]的初始化矩阵*);
+dataeigbefall =(*ParallelTable*)
+  Table[processeigen[HBdG[mu]], {mu, 1/2, maxmu, 1}];
 
 
-dataeigbefall = Table[processeigen[HBdG[mu]], {mu, 1/2, maxmu, 1}];
+(* SC caluclation *)
+g = 1/2.38 (-1)/Log[1/(2 omgd)];
+temp = 0.01;
+cycle = 1;
+deltainit = Table[deltaana[10, 2, r], {r, 0, R, rstep}](*Tanh[3 ris]*);
+deltadata = {deltainit};
+(*hbdginitmatall=ParallelTable[HBdGinit[i],{i,1/2,maxmu,1}];*)
+fcycle[];
+
+
+(* functions needed to plot DOS *)
+dffermi[\[Iota]E_,\[Omega]_,Ttempe_]:=(1.75` E^((1.75` (-\[Iota]E+\[Omega]))/Ttempe))/((1+E^((1.75` (-\[Iota]E+\[Omega]))/Ttempe))^2 Ttempe);
+ldos[\[Mu]_,dataeigbef_,\[Omega]_,temp_]:=Module[{c1,c2,tab1,tab2,tab12T,tab34T,\[Delta]vec,\[Delta]mvec,fE},c1=dataeigbef[[All,2,1;;Nstates]];c2=dataeigbef[[All,2,Nstates+1;;2Nstates]];\[Delta]vec=SparseArray[Table[{\[Eta],\[Eta]}->dffermi[Eetabef[dataeigbef,\[Eta]],\[Omega],temp],{\[Eta],1,2Nstates,1}]];\[Delta]mvec=SparseArray[Table[{\[Eta],\[Eta]}->dffermi[-Eetabef[dataeigbef,\[Eta]],\[Omega],temp],{\[Eta],1,2Nstates,1}]];tab1=Transpose[c1] . \[Delta]vec . Conjugate[c1];tab2=Transpose[c2] . \[Delta]mvec . Conjugate[c2];
+Diagonal[Transpose[Conjugate[phiniv[\[Mu],-1]]] . tab1 . phiniv[\[Mu],-1]+Transpose[Conjugate[phiniv[\[Mu],1]]] . tab2 . phiniv[\[Mu],1]]]
+plotdosring[dosranged_,eposition_,xrange_,color_:"SunsetColors"]:=ListDensityPlot[Select[Flatten[Table[{#[[1]]Cos[\[Theta]],#[[1]]Sin[\[Theta]],#[[2]]},{\[Theta],0,2Pi,0.02}]&/@(Select[{#[[1]],#[[2]],#[[3]]}&/@({#[[1]],#[[2]],#[[3]]}&/@dosranged),Abs@(#[[1]]-eposition)<=0.01&][[All,2;;3]]),1],Abs@#[[1]]<=xrange\[And]Abs@#[[2]]<=xrange&],(*FrameLabel\[Rule](Style[#,Black,16,Bold,FontFamily\[Rule]"Times New Roman"]&)/@{"E/Subscript[\[CapitalDelta], 0]","r/Subscript[\[Xi], 0]"},*)FrameTicksStyle->{{{Black,16},None},{{Black,16},None}},ColorFunction->color,Frame->True,FrameTicks->Automatic];
+plotdos[dosdata_,xrange_,aspectratio_,color_:"BlueGreenYellow"]:=ListDensityPlot[{#[[1]],#[[2]],#[[3]]}&/@Select[dosdata,#[[2]]<xrange&],PlotLegends->Automatic,FrameLabel->(Style[#,Black,16,Bold,FontFamily->"Times New Roman"]&)/@{"E/\!\(\*SubscriptBox[\(\[CapitalDelta]\), \(0\)]\)","r/\!\(\*SubscriptBox[\(\[Xi]\), \(0\)]\)"},FrameTicksStyle->{{{Black,14},None},{{Black,14},None}},AspectRatio->aspectratio,ColorFunction->color];
+dosdata[dataeigbefall_,temp_,wrange_:1.2,wstep_:0.03]:=Block[{dos,dosranged},dos=Table[ParallelSum[Quiet@ldos[\[Mu],dataeigbefall[[(2\[Mu]+1)/2]],\[Omega],temp],{\[Mu],1/2,maxmu,1}],{\[Omega],-wrange,wrange,wstep}];dosranged=Flatten[ParallelTable[Insert[#,(Transpose[{Range[-wrange,wrange,wstep],(Transpose[{ris,#}]&/@dos)}])[[i,1]],1]&/@(Transpose[{Range[-wrange,wrange,wstep],(Transpose[{ris,#}]&/@dos)}][[i,2]]),{i,Length@dos}],1]];
+
+
+(* plot dos *)
+dos = dosdata[dataeigbefall, 0.01, 1.2, 0.03];
+
+plotdos[dos, 7.8, 2]
+
+plotdosring[dos, 0.4, 7., "BlueGreenYellow"]
+
+(* str = OpenWrite["ldos_sc,continuousNstates=200,R=100.0,kfxi=7.6,ef=12,ecut=10,temp=0.01"];
+Write[str, dos];
+Close[str];
+Clear[str];
+
+str = OpenRead["ldos_sc,continuousNstates=200,R=100.0,kfxi=7.6,ef=12,ecut=10,temp=0.01"];
+dos = Read[str];
+Close[str];
+Clear[str]; *)
 
 
 
